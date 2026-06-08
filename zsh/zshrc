@@ -175,3 +175,14 @@ wl() {
     *)       print -u2 "wl: unknown tool: $tool"; return 1 ;;
   esac
 }
+
+# Ctrl+G - one-key launcher: submit `wl` from any prompt. Warp can't bind a key to a tab
+# config, but the shell can - this types `wl` and accepts it, so the launcher opens and
+# acts in the current tab. Rebinds zsh's rarely-used send-break; change the chord below
+# if you use Ctrl+G. (Only fires at an idle prompt, not while a TUI owns the terminal.)
+_wl_launch_widget() {
+  BUFFER="wl"
+  zle accept-line
+}
+zle -N _wl_launch_widget
+bindkey '^g' _wl_launch_widget
