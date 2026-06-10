@@ -29,6 +29,7 @@ printf '%s\n' "$ROOT/from-pr"
 EOF
 cat > "$BIN/worktree-setup.sh" <<EOF
 #!/bin/sh
+printf 'SETUP ARGS:%s\n' "\$*" >> "$REC"
 printf '%s\n' "$ROOT/from-setup"
 EOF
 for t in claude lazygit serie; do
@@ -60,7 +61,8 @@ check() { # desc  line  expect_pwd  [rec_substr]
 check "worktree+shell  -> cd ref, no launch"             "v1${T}worktree${T}${REPO}${T}${WT}${T}shell" "$WT"
 check "repo+lazygit    -> cd repo, lazygit runs there"   "v1${T}repo${T}${REPO}${T}${T}lazygit"        "$REPO" "$REPO"
 check "pr+serie        -> pr-worktree.sh, serie -i head" "v1${T}pr${T}${REPO}${T}123${T}serie"         "$ROOT/from-pr" "ARGS:--initial-selection head"
-check "branch+shell    -> worktree-setup.sh"             "v1${T}branch${T}${REPO}${T}feat/x${T}shell"  "$ROOT/from-setup"
+check "branch+shell    -> worktree-setup.sh, empty base" "v1${T}branch${T}${REPO}${T}feat/x${T}shell"             "$ROOT/from-setup" "SETUP ARGS:feat/x"
+check "branch+base      -> worktree-setup.sh fwds base"  "v1${T}branch${T}${REPO}${T}feat/x${T}shell${T}origin/dev" "$ROOT/from-setup" "SETUP ARGS:feat/x origin/dev"
 # claude arms the auto-submit flag (it runs as a real command at the next prompt, not
 # inline); verify the cd landed AND _WL_AUTOSUBMIT was set.
 armed="$(WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -c "source '$FN'; wl >/dev/null 2>&1; print -r -- \"\$PWD|\$_WL_AUTOSUBMIT\"")"

@@ -120,7 +120,7 @@ add-zle-hook-widget line-init _wl_autosubmit_hook
 # browse a repo's PRs / branches / worktrees / recent repos, then open the pick in
 # claude / lazygit / serie / a plain shell, landing in the right worktree every time.
 # wlaunch is a pure picker: it renders to stderr and prints ONE tab-separated line
-#   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool
+#   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool<TAB>base
 # to stdout (cancel -> nothing + non-zero). This function resolves the directory,
 # reusing pr-worktree.sh / worktree-setup.sh exactly as the tab configs do, then
 # launches the tool: lazygit/serie run inline (OSC 7 moves Warp's folder chip onto the
@@ -129,18 +129,18 @@ add-zle-hook-widget line-init _wl_autosubmit_hook
 # (WLAUNCH_BIN_DIR overrides the script dir; used only by the dispatch check.)
 wl() {
   emulate -L zsh
-  local line schema kind repo ref tool dir
+  local line schema kind repo ref tool base dir
   local bindir="${WLAUNCH_BIN_DIR:-$HOME/.warp/bin}"
   line="$("$bindir/wlaunch" "$@")" || return       # cancel -> non-zero -> bail
   [[ -n $line ]] || return
   # Split on tab preserving empty fields (kind=repo has an empty ref). `read` can't:
   # tab is IFS-whitespace, so it collapses runs and drops empties, shifting columns.
   local -a f; f=("${(@ps:\t:)line}")
-  schema=$f[1]; kind=$f[2]; repo=$f[3]; ref=$f[4]; tool=$f[5]
+  schema=$f[1]; kind=$f[2]; repo=$f[3]; ref=$f[4]; tool=$f[5]; base=$f[6]
   [[ $schema == v1 ]] || { print -u2 "wl: unrecognized result: $line"; return 1; }
   case $kind in
-    pr)       dir="$(cd "$repo" && "$bindir/pr-worktree.sh" "$ref")"    || return ;;
-    branch)   dir="$(cd "$repo" && "$bindir/worktree-setup.sh" "$ref")" || return ;;
+    pr)       dir="$(cd "$repo" && "$bindir/pr-worktree.sh" "$ref")"            || return ;;
+    branch)   dir="$(cd "$repo" && "$bindir/worktree-setup.sh" "$ref" "$base")" || return ;;
     worktree) dir="$ref" ;;
     repo)     dir="$repo" ;;
     *)        print -u2 "wl: unknown kind: $kind"; return 1 ;;
