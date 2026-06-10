@@ -28,32 +28,15 @@ source $ZSH/oh-my-zsh.sh
 # User configuration
 export PATH="$HOME/.local/bin:$PATH"
 
-# Optional work-layer shell config (installed by `setup --with-work`). When
-# present it defines _gh_work_account to route specific orgs to a work account.
+# Optional work-layer shell config (installed by `setup --with-work`).
 [ -r "$HOME/.config/zsh/work.zsh" ] && source "$HOME/.config/zsh/work.zsh"
 
-# ---------------------------------------------------------------------------
-# Auto-switch gh CLI account based on repo remote owner
-# ---------------------------------------------------------------------------
-_gh_auto_switch() {
-    # Skip in Claude Code sessions - handled by PreToolUse hook instead
-    [ -n "$CLAUDECODE" ] && return
-    local remote owner target current
-    remote=$(git remote get-url origin 2>/dev/null) || return
-    owner=$(echo "$remote" | sed -E 's#.*(github\.com[:/])([^/]+)/.*#\2#')
-    [ -z "$owner" ] && return
-    target="@@GH_USER@@"
-    # Work layer (optional): _gh_work_account, defined by ~/.config/zsh/work.zsh,
-    # maps specific orgs to a work account; falls through to personal otherwise.
-    if typeset -f _gh_work_account >/dev/null 2>&1; then
-        local w; w="$(_gh_work_account "$owner")"; [ -n "$w" ] && target="$w"
-    fi
-    current=$(gh auth status 2>&1 | grep "Active account: true" -B3 | grep "account " | sed -E 's/.*account ([^ ]+).*/\1/')
-    [ "$current" = "$target" ] && return
-    gh auth switch --user "$target" 2>/dev/null
-    echo "gh: switched to $target"
-}
-chpwd_functions+=(_gh_auto_switch)
+# NOTE: the old _gh_auto_switch chpwd hook (global `gh auth switch` per repo) is
+# gone. Account routing is per-invocation now: the wlaunch.ghaccount git config
+# key (set globally + overridden by the work gitconfig via includeIf) pins
+# GH_TOKEN inside wlaunch and the ~/.warp/bin worktree scripts, and Claude/CLI
+# usage injects GH_TOKEN=$(gh auth token -u <account>) per command. The gh
+# "active account" is no longer load-bearing anywhere.
 
 # Remember the last git repo you were in, so Warp's worktree / launch tab configs
 # default to it (no prompt) when Cmd+T opens a tab outside a repo (e.g. in $HOME).
