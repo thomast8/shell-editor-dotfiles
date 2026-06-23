@@ -8,7 +8,15 @@ set -u
 
 SRC="${0:A:h}/zshrc"
 FN="$(mktemp)"
-awk '/^wl\(\) \{/,/^\}/' "$SRC" > "$FN"
+awk '
+  /^wl\(\) \{/ { in_fn=1; depth=0 }
+  in_fn {
+    print
+    depth += gsub(/\{/, "{")
+    depth -= gsub(/\}/, "}")
+    if (depth == 0) exit
+  }
+' "$SRC" > "$FN"
 
 grep -q '^wl() {' "$FN" && [[ "$(grep -c '^}' "$FN")" -eq 1 ]] || { print "FAIL: could not extract wl()"; exit 1 }
 zsh -n "$FN" || { print "FAIL: wl() syntax error"; exit 1 }
@@ -17,6 +25,11 @@ print "ok: wl() extracted and parses cleanly"
 ROOT="$(mktemp -d)"
 BIN="$ROOT/bin"; REPO="$ROOT/repo"; WT="$ROOT/wt"; REC="$ROOT/rec"
 mkdir -p "$BIN" "$REPO" "$WT" "$ROOT/from-pr" "$ROOT/from-setup"
+HOME_DIR="$ROOT/home"
+mkdir -p "$HOME_DIR/.oh-my-zsh" "$HOME_DIR/.config/zsh"
+cat > "$HOME_DIR/.oh-my-zsh/oh-my-zsh.sh" <<'EOF'
+plugins_loaded=loaded
+EOF
 
 cat > "$BIN/wlaunch" <<'EOF'
 #!/bin/sh
@@ -25,6 +38,7 @@ printf '%s\n' "$WL_TEST_LINE"
 EOF
 cat > "$BIN/pr-worktree.sh" <<EOF
 #!/bin/sh
+[ -n "\${WL_PR_FAIL:-}" ] && exit 2
 printf '%s\n' "$ROOT/from-pr"
 EOF
 cat > "$BIN/worktree-setup.sh" <<EOF
@@ -80,6 +94,30 @@ fi
 
 cancel_out="$(WL_TEST_FAIL=1 zsh -c "cd '$ROOT'; source '$FN'; wl >/dev/null 2>&1; pwd")"
 if [[ "$cancel_out" == "$ROOT" ]]; then print "PASS: cancel -> no cd, no launch"; else print "FAIL: cancel changed dir to $cancel_out"; (( fails++ )); fi
+
+ZDOT="$ROOT/zdot"
+mkdir -p "$ZDOT"
+ln -s "$SRC" "$ZDOT/.zshrc"
+fast_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -lic 'wl >/dev/null 2>&1; print -r -- "${_WL_FAST_PATH_ACTIVE:-0}|${_WL_AUTOSUBMIT:-}|${plugins:-unset}"')"
+if [[ "$fast_out" == "1|claude|unset" ]]; then
+  print "PASS: fast zshrc path -> wl before Oh My Zsh/plugins"
+else
+  print "FAIL: fast path = $fast_out  want 1|claude|unset"; (( fails++ ))
+fi
+
+fast_reload_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -lic 'wl >/dev/null 2>&1; _wl_full_shell_after_agent; print -r -- "${_WL_AUTOSUBMIT:-}|${plugins_loaded:-unset}|${WLAUNCH_SKIP_BREW_SHELLENV:-unset}"')"
+if [[ "$fast_reload_out" == "claude|loaded|unset" ]]; then
+  print "PASS: fast reload -> preserves autosubmit and loads full shell"
+else
+  print "FAIL: fast reload = $fast_reload_out  want claude|loaded|unset"; (( fails++ ))
+fi
+
+helper_fail_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_PR_FAIL=1 WL_TEST_LINE="v1${T}pr${T}${REPO}${T}123${T}shell" zsh -lic 'wl >/dev/null 2>&1; print -r -- "${_WL_FULL_SHELL_LOADED:-0}|${plugins_loaded:-unset}"')"
+if [[ "$helper_fail_out" == "1|loaded" ]]; then
+  print "PASS: fast helper failure -> falls back to full shell"
+else
+  print "FAIL: helper failure = $helper_fail_out  want 1|loaded"; (( fails++ ))
+fi
 
 print ""
 (( fails )) && { print "RESULT: $fails failure(s)"; exit 1 } || print "RESULT: all dispatch cases pass"
