@@ -1,86 +1,16 @@
-if [[ -z ${WLAUNCH_FAST_PATH_DISABLE:-} ]]; then
-  case ${ZSH_EXECUTION_STRING:-} in
-    wl|wl\ *) WLAUNCH_SKIP_BREW_SHELLENV=1 ;;
-  esac
-fi
-[[ -n ${WLAUNCH_SKIP_BREW_SHELLENV:-} ]] || eval "$(/opt/homebrew/bin/brew shellenv)"
-
-# Fast path for Warp tab configs that execute `wl`: define just enough shell to
-# open WLauncher before Oh My Zsh/plugins/completion load, then lazy-load the
-# full interactive shell after cancel, shell landing, or after the launched agent
-# exits. This keeps the first visible WLauncher frame out of zsh startup debt.
-typeset -g _WL_AUTOSUBMIT="${_WL_AUTOSUBMIT:-}"
-typeset -g _WL_LOAD_FULL_SHELL_AFTER_AGENT="${_WL_LOAD_FULL_SHELL_AFTER_AGENT:-}"
-typeset -g _WL_FULL_SHELL_LOADED="${_WL_FULL_SHELL_LOADED:-}"
-_wl_load_full_shell_once() {
-  [[ ${_WL_FAST_PATH_ACTIVE:-} == 1 ]] || return 0
-  [[ -z $_WL_FULL_SHELL_LOADED ]] || return 0
-  local zshrc_path="${ZDOTDIR:-$HOME}/.zshrc"
-  [[ -r $zshrc_path ]] || return 0
-  _WL_FULL_SHELL_LOADED=1
-  local old_disable="${WLAUNCH_FAST_PATH_DISABLE-}" had_disable=0
-  [[ -n ${WLAUNCH_FAST_PATH_DISABLE+x} ]] && had_disable=1
-  export WLAUNCH_FAST_PATH_DISABLE=1
-  unset WLAUNCH_SKIP_BREW_SHELLENV
-  source "$zshrc_path"
-  if (( had_disable )); then
-    export WLAUNCH_FAST_PATH_DISABLE="$old_disable"
-  else
-    unset WLAUNCH_FAST_PATH_DISABLE
-  fi
-}
-_wl_full_shell_after_agent() {
-  [[ -n $_WL_LOAD_FULL_SHELL_AFTER_AGENT ]] || return 0
-  _WL_LOAD_FULL_SHELL_AFTER_AGENT=""
-  _wl_load_full_shell_once
-}
-(( ${precmd_functions[(I)_wl_full_shell_after_agent]} )) || precmd_functions+=(_wl_full_shell_after_agent)
-_wl_autosubmit_hook() {
-  [[ -n $_WL_AUTOSUBMIT ]] || return
-  BUFFER=$_WL_AUTOSUBMIT
-  _WL_AUTOSUBMIT=""
-  zle accept-line
-}
-if [[ -o interactive ]]; then
-  zle -N _wl_autosubmit_hook
-  autoload -Uz add-zle-hook-widget
-  add-zle-hook-widget -d line-init _wl_autosubmit_hook 2>/dev/null
-  add-zle-hook-widget line-init _wl_autosubmit_hook
-fi
-
-wl() {
-  emulate -L zsh
-  local line schema kind repo ref tool base dir
-  local bindir="${WLAUNCH_BIN_DIR:-$HOME/.warp/bin}"
-  line="$("$bindir/wlaunch" "$@")" || { (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return; }
-  [[ -n $line ]] || { (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return; }
-  local -a f; f=("${(@ps:\t:)line}")
-  schema=$f[1]; kind=$f[2]; repo=$f[3]; ref=$f[4]; tool=$f[5]; base=$f[6]
-  [[ $schema == v1 ]] || { print -u2 "wl: unrecognized result: $line"; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return 1; }
-  case $kind in
-    pr)       dir="$(cd "$repo" && "$bindir/pr-worktree.sh" "$ref")"            || { (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return; } ;;
-    branch)   dir="$(cd "$repo" && "$bindir/worktree-setup.sh" "$ref" "$base")" || { (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return; } ;;
-    worktree) dir="$ref" ;;
-    repo)     dir="$repo" ;;
-    *)        print -u2 "wl: unknown kind: $kind"; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return 1 ;;
-  esac
-  [[ -n $dir && -d $dir ]] || { print -u2 "wl: could not resolve directory"; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return 1; }
-  builtin cd -- "$dir" || return
-  printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
-  case $tool in
-    claude)  _WL_AUTOSUBMIT="claude"; _WL_LOAD_FULL_SHELL_AFTER_AGENT=1 ;;
-    codex)   _WL_AUTOSUBMIT="codex"; _WL_LOAD_FULL_SHELL_AFTER_AGENT=1 ;;
-    lazygit) lazygit; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once ;;
-    serie)   if [[ $kind == pr || $kind == branch ]]; then serie --initial-selection head; else serie; fi; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once ;;
-    shell)   (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once ;;
-    *)       print -u2 "wl: unknown tool: $tool"; (( $+functions[_wl_load_full_shell_once] )) && _wl_load_full_shell_once; return 1 ;;
-  esac
-}
-if [[ -z ${WLAUNCH_FAST_PATH_DISABLE:-} ]]; then
-  case ${ZSH_EXECUTION_STRING:-} in
-    wl|wl\ *) _WL_FAST_PATH_ACTIVE=1; return ;;
-  esac
-fi
+# Inlined `brew shellenv` - its output is static except PATH, which path_helper
+# just prepends homebrew onto. Forking brew + path_helper costs ~100ms on every
+# shell (Warp launches with --no_rcs, so this runs on every tab before `wl`); the
+# prepend-and-dedupe below is the fork-free equivalent. Re-run `brew shellenv` and
+# refresh this block if Homebrew ever moves or changes its output.
+export HOMEBREW_PREFIX="/opt/homebrew"
+export HOMEBREW_CELLAR="/opt/homebrew/Cellar"
+export HOMEBREW_REPOSITORY="/opt/homebrew"
+typeset -U path fpath
+path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
+fpath=(/opt/homebrew/share/zsh/site-functions $fpath)
+[[ -z ${MANPATH-} ]] || export MANPATH=":${MANPATH#:}"
+export INFOPATH="/opt/homebrew/share/info:${INFOPATH:-}"
 
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
@@ -104,6 +34,33 @@ plugins=(
   zsh-autosuggestions
   zsh-syntax-highlighting
 )
+
+# --- Fast completion init -------------------------------------------------
+# Oh My Zsh runs `compinit -i -d <dump>` on every launch, which re-audits and
+# re-scans $fpath (~250ms - the bulk of zsh startup, and it runs before Warp's
+# typed tab command, e.g. `wl`, can appear). Wrap compinit so OMZ's call loads
+# the cached dump with `-C` (skip audit + fpath scan) when the dump is fresh,
+# and only does the full rebuild at most once a day. OMZ adds its plugin dirs
+# to $fpath before calling compinit, so the once-a-day rebuild still captures
+# git/docker completions, and OMZ's own zrecompile keeps the .zwc current.
+# (`autoload -U compinit` inside OMZ does not clobber a pre-defined function,
+# so this wrapper wins; glob mtime qualifiers don't work inside [[ ]], hence
+# zstat. The `touch` resets the 24h clock when compinit finds nothing to
+# rebuild, otherwise the stale mtime would pin us on the slow path forever.)
+compinit() {
+  unfunction compinit; autoload -Uz compinit
+  zmodload -F zsh/stat b:zstat 2>/dev/null
+  zmodload zsh/datetime 2>/dev/null
+  local dump=$ZSH_COMPDUMP; local -a st
+  if [[ -s $dump && -n $EPOCHSECONDS ]] && zstat -A st +mtime $dump 2>/dev/null \
+     && (( EPOCHSECONDS - st[1] < 86400 )); then
+    compinit -C "$@"            # fresh (<24h): load cached dump, skip audit + scan
+  else
+    compinit "$@"              # missing/empty or >=24h: full rebuild (audit + scan)
+    touch -- $dump 2>/dev/null  # reset the 24h clock even if the dump was unchanged
+  fi
+}
+# --------------------------------------------------------------------------
 
 source $ZSH/oh-my-zsh.sh
 
