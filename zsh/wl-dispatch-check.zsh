@@ -32,7 +32,7 @@ cat > "$BIN/worktree-setup.sh" <<EOF
 printf 'SETUP ARGS:%s\n' "\$*" >> "$REC"
 printf '%s\n' "$ROOT/from-setup"
 EOF
-for t in claude lazygit serie; do
+for t in claude codex lazygit serie; do
 cat > "$BIN/$t" <<EOF
 #!/bin/sh
 pwd >> "$REC"
@@ -70,6 +70,12 @@ if [[ "$armed" == "$REPO|claude" ]]; then
   print "PASS: claude (armed)   -> cd repo + _WL_AUTOSUBMIT=claude"
 else
   print "FAIL: claude arm = $armed  want $REPO|claude"; (( fails++ ))
+fi
+codex_armed="$(WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}codex" zsh -c "source '$FN'; wl >/dev/null 2>&1; print -r -- \"\$PWD|\$_WL_AUTOSUBMIT\"")"
+if [[ "$codex_armed" == "$REPO|codex" ]]; then
+  print "PASS: codex (armed)    -> cd repo + _WL_AUTOSUBMIT=codex"
+else
+  print "FAIL: codex arm = $codex_armed  want $REPO|codex"; (( fails++ ))
 fi
 
 cancel_out="$(WL_TEST_FAIL=1 zsh -c "cd '$ROOT'; source '$FN'; wl >/dev/null 2>&1; pwd")"

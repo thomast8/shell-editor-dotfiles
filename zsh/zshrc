@@ -99,9 +99,9 @@ caw() {
   print -z claude
 }
 
-# wl auto-submit: when wl picks claude it sets _WL_AUTOSUBMIT; this line-init hook then
+# wl auto-submit: when wl picks a CLI agent it sets _WL_AUTOSUBMIT; this line-init hook then
 # submits it as a real typed command at the NEXT prompt - so Warp gets a clean boundary
-# (folder chip) AND a bare `claude` it recognizes as a CLI agent (toolbar), with no Enter
+# (folder chip) AND a bare agent command it recognizes as a CLI agent (toolbar), with no Enter
 # from you. add-zle-hook-widget composes with OMZ's own zle-line-init instead of clobbering
 # it; the hook is a permanent no-op until armed.
 typeset -g _WL_AUTOSUBMIT=""
@@ -118,14 +118,14 @@ add-zle-hook-widget line-init _wl_autosubmit_hook
 
 # wl - the unified launcher TUI (github.com/thomast8/wlaunch). One UI for everything:
 # browse a repo's PRs / branches / worktrees / recent repos, then open the pick in
-# claude / lazygit / serie / a plain shell, landing in the right worktree every time.
+# claude / codex / lazygit / serie / a plain shell, landing in the right worktree every time.
 # wlaunch is a pure picker: it renders to stderr and prints ONE tab-separated line
 #   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool<TAB>base
 # to stdout (cancel -> nothing + non-zero). This function resolves the directory,
 # reusing pr-worktree.sh / worktree-setup.sh exactly as the tab configs do, then
 # launches the tool: lazygit/serie run inline (OSC 7 moves Warp's folder chip onto the
-# worktree); claude is armed via _WL_AUTOSUBMIT so it auto-runs as a real command at the
-# next prompt and Warp attaches its agent toolbar. Cancel -> no cd, no launch.
+# worktree); CLI agents are armed via _WL_AUTOSUBMIT so they auto-run as real commands
+# at the next prompt and Warp attaches the agent toolbar. Cancel -> no cd, no launch.
 # (WLAUNCH_BIN_DIR overrides the script dir; used only by the dispatch check.)
 wl() {
   emulate -L zsh
@@ -152,6 +152,7 @@ wl() {
   printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
   case $tool in
     claude)  _WL_AUTOSUBMIT="claude" ;;              # auto-submit at next prompt (real cmd -> Warp toolbar)
+    codex)   _WL_AUTOSUBMIT="codex" ;;
     lazygit) lazygit ;;
     serie)   if [[ $kind == pr || $kind == branch ]]; then serie --initial-selection head; else serie; fi ;;
     shell)   : ;;                                    # already cd'd; land at a prompt
