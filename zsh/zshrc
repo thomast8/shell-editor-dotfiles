@@ -144,8 +144,19 @@ caw() {
 # from you. add-zle-hook-widget composes with OMZ's own zle-line-init instead of clobbering
 # it; the hook is a permanent no-op until armed.
 typeset -g _WL_AUTOSUBMIT="${_WL_AUTOSUBMIT:-}"
+typeset -g _WL_SETTLE="${_WL_SETTLE:-}"
 _wl_autosubmit_hook() {
   [[ -n $_WL_AUTOSUBMIT ]] || return
+  # Worktree-CREATING picks (branch/pr) run a multi-second setup script that lives in the
+  # repo root, so Warp's process-based folder detection (honor_ps1=false -> OSC 7 ignored)
+  # latches onto the repo root and the chip stays stuck there. Bounce off ONE empty prompt
+  # first (instant, no keystroke from you) so Warp re-samples the worktree cwd, THEN submit
+  # the agent on the next line-init. Instant switch/repo picks don't set _WL_SETTLE.
+  if [[ -n $_WL_SETTLE ]]; then
+    _WL_SETTLE=""
+    zle accept-line          # empty line -> fresh prompt in the worktree; _WL_AUTOSUBMIT stays armed
+    return
+  fi
   BUFFER=$_WL_AUTOSUBMIT
   _WL_AUTOSUBMIT=""
   zle accept-line
@@ -190,8 +201,8 @@ wl() {
   # the worktree before the tool takes over the screen.
   printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
   case $tool in
-    claude)  _WL_AUTOSUBMIT="claude" ;;              # auto-submit at next prompt (real cmd -> Warp toolbar)
-    codex)   _WL_AUTOSUBMIT="codex" ;;
+    claude)  _WL_AUTOSUBMIT="claude"; [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;  # settle first when we just created a worktree
+    codex)   _WL_AUTOSUBMIT="codex";  [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;
     lazygit) lazygit ;;
     serie)   if [[ $kind == pr || $kind == branch ]]; then serie --initial-selection head; else serie; fi ;;
     shell)   : ;;                                    # already cd'd; land at a prompt
