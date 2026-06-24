@@ -1,0 +1,3 @@
+# GitNexus drops its skill bundle into .claude/skills/ when it indexes the repo.
+# Machine-local tooling, not part of these dotfiles - keep it out of the repo.
+.claude/
