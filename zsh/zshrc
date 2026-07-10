@@ -168,7 +168,8 @@ add-zle-hook-widget line-init _wl_autosubmit_hook
 
 # wl - the unified launcher TUI (github.com/thomast8/wlaunch). One UI for everything:
 # browse a repo's PRs / branches / worktrees / recent repos, then open the pick in
-# claude / codex / lazygit / serie / a plain shell, landing in the right worktree every time.
+# Claude / Codex CLI / Codex Desktop / lazygit / serie / a plain shell, landing in the
+# right worktree every time.
 # wlaunch is a pure picker: it renders to stderr and prints ONE tab-separated line
 #   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool<TAB>base
 # to stdout (cancel -> nothing + non-zero). This function resolves the directory,
@@ -209,6 +210,7 @@ wl() {
   case $tool in
     claude)  _WL_AUTOSUBMIT="claude"; [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;  # settle first when we just created a worktree
     codex)   _WL_AUTOSUBMIT="codex";  [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;
+    codex-desktop) codex app "$dir" ;;
     lazygit) lazygit ;;
     serie)   if [[ $kind == pr || $kind == branch ]]; then serie --initial-selection head; else serie; fi ;;
     shell)   : ;;                                    # already cd'd; land at a prompt

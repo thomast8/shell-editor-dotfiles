@@ -24,7 +24,7 @@ print "ok: wl() extracted and parses cleanly"
 
 ROOT="$(mktemp -d)"
 BIN="$ROOT/bin"; REPO="$ROOT/repo"; PLAIN="$ROOT/plain"; WT="$ROOT/wt"; REC="$ROOT/rec"
-mkdir -p "$BIN" "$REPO" "$PLAIN" "$WT" "$ROOT/from-pr" "$ROOT/from-setup" "$ROOT/from-canonical"
+mkdir -p "$BIN" "$REPO" "$PLAIN" "$WT" "$ROOT/from desktop" "$ROOT/from-pr" "$ROOT/from-setup" "$ROOT/from-canonical"
 git -C "$REPO" init -q
 
 cat > "$BIN/wlaunch" <<'EOF'
@@ -52,7 +52,7 @@ for t in claude codex lazygit serie; do
 cat > "$BIN/$t" <<EOF
 #!/bin/sh
 pwd >> "$REC"
-printf 'TOOL:%s ARGS:%s\n' "$t" "\$*" >> "$REC"
+printf 'TOOL:%s ARGC:%s ARGS:%s\n' "$t" "\$#" "\$*" >> "$REC"
 EOF
 done
 chmod +x "$BIN"/*
@@ -80,6 +80,9 @@ check "plain+shell     -> cd path without reconciliation" "v1${T}repo${T}${PLAIN
 check "pr+serie        -> pr-worktree.sh, serie -i head" "v1${T}pr${T}${REPO}${T}123${T}serie"         "$ROOT/from-pr" "ARGS:--initial-selection head"
 check "branch+shell    -> worktree-setup.sh, empty base" "v1${T}branch${T}${REPO}${T}feat/x${T}shell"             "$ROOT/from-setup" "SETUP ARGS:feat/x"
 check "branch+base      -> worktree-setup.sh fwds base"  "v1${T}branch${T}${REPO}${T}feat/x${T}shell${T}origin/dev" "$ROOT/from-setup" "SETUP ARGS:feat/x origin/dev"
+check "repo+desktop    -> codex app canonical path"      "v1${T}repo${T}${REPO}${T}${T}codex-desktop" "$ROOT/from-canonical" "TOOL:codex ARGC:2 ARGS:app $ROOT/from-canonical"
+check "branch+desktop  -> codex app shared worktree"     "v1${T}branch${T}${REPO}${T}feat/x${T}codex-desktop" "$ROOT/from-setup" "TOOL:codex ARGC:2 ARGS:app $ROOT/from-setup"
+check "worktree+desktop -> preserve spaces in app path"  "v1${T}worktree${T}${REPO}${T}${ROOT}/from desktop${T}codex-desktop" "$ROOT/from desktop" "TOOL:codex ARGC:2 ARGS:app $ROOT/from desktop"
 # claude arms the auto-submit flag (it runs as a real command at the next prompt, not
 # inline); verify the cd landed AND _WL_AUTOSUBMIT was set.
 armed="$(WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -c "source '$FN'; wl >/dev/null 2>&1; print -r -- \"\$PWD|\$_WL_AUTOSUBMIT\"")"
