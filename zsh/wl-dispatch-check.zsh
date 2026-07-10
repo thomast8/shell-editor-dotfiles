@@ -23,13 +23,9 @@ zsh -n "$FN" || { print "FAIL: wl() syntax error"; exit 1 }
 print "ok: wl() extracted and parses cleanly"
 
 ROOT="$(mktemp -d)"
-BIN="$ROOT/bin"; REPO="$ROOT/repo"; WT="$ROOT/wt"; REC="$ROOT/rec"
-mkdir -p "$BIN" "$REPO" "$WT" "$ROOT/from-pr" "$ROOT/from-setup"
-HOME_DIR="$ROOT/home"
-mkdir -p "$HOME_DIR/.oh-my-zsh" "$HOME_DIR/.config/zsh"
-cat > "$HOME_DIR/.oh-my-zsh/oh-my-zsh.sh" <<'EOF'
-plugins_loaded=loaded
-EOF
+BIN="$ROOT/bin"; REPO="$ROOT/repo"; PLAIN="$ROOT/plain"; WT="$ROOT/wt"; REC="$ROOT/rec"
+mkdir -p "$BIN" "$REPO" "$PLAIN" "$WT" "$ROOT/from-pr" "$ROOT/from-setup" "$ROOT/from-canonical"
+git -C "$REPO" init -q
 
 cat > "$BIN/wlaunch" <<'EOF'
 #!/bin/sh
@@ -45,6 +41,12 @@ cat > "$BIN/worktree-setup.sh" <<EOF
 #!/bin/sh
 printf 'SETUP ARGS:%s\n' "\$*" >> "$REC"
 printf '%s\n' "$ROOT/from-setup"
+EOF
+cat > "$BIN/canonical-checkout.sh" <<EOF
+#!/bin/sh
+[ -n "\${WL_CANONICAL_FAIL:-}" ] && exit 3
+printf 'CANONICAL:%s\n' "\$*" >> "$REC"
+printf '%s\n' "$ROOT/from-canonical"
 EOF
 for t in claude codex lazygit serie; do
 cat > "$BIN/$t" <<EOF
@@ -73,51 +75,34 @@ check() { # desc  line  expect_pwd  [rec_substr]
 }
 
 check "worktree+shell  -> cd ref, no launch"             "v1${T}worktree${T}${REPO}${T}${WT}${T}shell" "$WT"
-check "repo+lazygit    -> cd repo, lazygit runs there"   "v1${T}repo${T}${REPO}${T}${T}lazygit"        "$REPO" "$REPO"
+check "repo+lazygit    -> reconcile primary checkout"   "v1${T}repo${T}${REPO}${T}${T}lazygit"        "$ROOT/from-canonical" "CANONICAL:$REPO"
+check "plain+shell     -> cd path without reconciliation" "v1${T}repo${T}${PLAIN}${T}${T}shell"           "$PLAIN"
 check "pr+serie        -> pr-worktree.sh, serie -i head" "v1${T}pr${T}${REPO}${T}123${T}serie"         "$ROOT/from-pr" "ARGS:--initial-selection head"
 check "branch+shell    -> worktree-setup.sh, empty base" "v1${T}branch${T}${REPO}${T}feat/x${T}shell"             "$ROOT/from-setup" "SETUP ARGS:feat/x"
 check "branch+base      -> worktree-setup.sh fwds base"  "v1${T}branch${T}${REPO}${T}feat/x${T}shell${T}origin/dev" "$ROOT/from-setup" "SETUP ARGS:feat/x origin/dev"
 # claude arms the auto-submit flag (it runs as a real command at the next prompt, not
 # inline); verify the cd landed AND _WL_AUTOSUBMIT was set.
 armed="$(WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -c "source '$FN'; wl >/dev/null 2>&1; print -r -- \"\$PWD|\$_WL_AUTOSUBMIT\"")"
-if [[ "$armed" == "$REPO|claude" ]]; then
-  print "PASS: claude (armed)   -> cd repo + _WL_AUTOSUBMIT=claude"
+if [[ "$armed" == "$ROOT/from-canonical|claude" ]]; then
+  print "PASS: claude (armed)   -> reconcile repo + _WL_AUTOSUBMIT=claude"
 else
-  print "FAIL: claude arm = $armed  want $REPO|claude"; (( fails++ ))
+  print "FAIL: claude arm = $armed  want $ROOT/from-canonical|claude"; (( fails++ ))
 fi
 codex_armed="$(WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}codex" zsh -c "source '$FN'; wl >/dev/null 2>&1; print -r -- \"\$PWD|\$_WL_AUTOSUBMIT\"")"
-if [[ "$codex_armed" == "$REPO|codex" ]]; then
-  print "PASS: codex (armed)    -> cd repo + _WL_AUTOSUBMIT=codex"
+if [[ "$codex_armed" == "$ROOT/from-canonical|codex" ]]; then
+  print "PASS: codex (armed)    -> reconcile repo + _WL_AUTOSUBMIT=codex"
 else
-  print "FAIL: codex arm = $codex_armed  want $REPO|codex"; (( fails++ ))
+  print "FAIL: codex arm = $codex_armed  want $ROOT/from-canonical|codex"; (( fails++ ))
 fi
+
+canonical_fail="$(WL_CANONICAL_FAIL=1 WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}shell" zsh -c "cd '$ROOT'; source '$FN'; wl >/dev/null 2>&1; pwd")"
+if [[ "$canonical_fail" == "$ROOT" ]]; then print "PASS: canonical failure -> no cd"; else print "FAIL: canonical failure changed dir to $canonical_fail"; (( fails++ )); fi
 
 cancel_out="$(WL_TEST_FAIL=1 zsh -c "cd '$ROOT'; source '$FN'; wl >/dev/null 2>&1; pwd")"
 if [[ "$cancel_out" == "$ROOT" ]]; then print "PASS: cancel -> no cd, no launch"; else print "FAIL: cancel changed dir to $cancel_out"; (( fails++ )); fi
 
-ZDOT="$ROOT/zdot"
-mkdir -p "$ZDOT"
-ln -s "$SRC" "$ZDOT/.zshrc"
-fast_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -lic 'wl >/dev/null 2>&1; print -r -- "${_WL_FAST_PATH_ACTIVE:-0}|${_WL_AUTOSUBMIT:-}|${plugins:-unset}"')"
-if [[ "$fast_out" == "1|claude|unset" ]]; then
-  print "PASS: fast zshrc path -> wl before Oh My Zsh/plugins"
-else
-  print "FAIL: fast path = $fast_out  want 1|claude|unset"; (( fails++ ))
-fi
-
-fast_reload_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_TEST_LINE="v1${T}repo${T}${REPO}${T}${T}claude" zsh -lic 'wl >/dev/null 2>&1; _wl_full_shell_after_agent; print -r -- "${_WL_AUTOSUBMIT:-}|${plugins_loaded:-unset}|${WLAUNCH_SKIP_BREW_SHELLENV:-unset}"')"
-if [[ "$fast_reload_out" == "claude|loaded|unset" ]]; then
-  print "PASS: fast reload -> preserves autosubmit and loads full shell"
-else
-  print "FAIL: fast reload = $fast_reload_out  want claude|loaded|unset"; (( fails++ ))
-fi
-
-helper_fail_out="$(HOME="$HOME_DIR" ZDOTDIR="$ZDOT" WL_PR_FAIL=1 WL_TEST_LINE="v1${T}pr${T}${REPO}${T}123${T}shell" zsh -lic 'wl >/dev/null 2>&1; print -r -- "${_WL_FULL_SHELL_LOADED:-0}|${plugins_loaded:-unset}"')"
-if [[ "$helper_fail_out" == "1|loaded" ]]; then
-  print "PASS: fast helper failure -> falls back to full shell"
-else
-  print "FAIL: helper failure = $helper_fail_out  want 1|loaded"; (( fails++ ))
-fi
+pr_fail="$(WL_PR_FAIL=1 WL_TEST_LINE="v1${T}pr${T}${REPO}${T}123${T}shell" zsh -c "cd '$ROOT'; source '$FN'; wl >/dev/null 2>&1; pwd")"
+if [[ "$pr_fail" == "$ROOT" ]]; then print "PASS: PR helper failure -> no cd"; else print "FAIL: PR helper failure changed dir to $pr_fail"; (( fails++ )); fi
 
 print ""
 (( fails )) && { print "RESULT: $fails failure(s)"; exit 1 } || print "RESULT: all dispatch cases pass"

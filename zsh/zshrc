@@ -172,8 +172,10 @@ add-zle-hook-widget line-init _wl_autosubmit_hook
 # wlaunch is a pure picker: it renders to stderr and prints ONE tab-separated line
 #   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool<TAB>base
 # to stdout (cancel -> nothing + non-zero). This function resolves the directory,
-# reusing pr-worktree.sh / worktree-setup.sh exactly as the tab configs do, then
-# launches the tool: lazygit/serie run inline (OSC 7 moves Warp's folder chip onto the
+# reusing pr-worktree.sh / worktree-setup.sh exactly as the tab configs do. Repo picks
+# first run canonical-checkout.sh so the primary checkout safely owns the default
+# branch for both Claude and Codex. Then it launches the tool: lazygit/serie run inline
+# (OSC 7 moves Warp's folder chip onto the
 # worktree); CLI agents are armed via _WL_AUTOSUBMIT so they auto-run as real commands
 # at the next prompt and Warp attaches the agent toolbar. Cancel -> no cd, no launch.
 # (WLAUNCH_BIN_DIR overrides the script dir; used only by the dispatch check.)
@@ -192,7 +194,11 @@ wl() {
     pr)       dir="$(cd "$repo" && "$bindir/pr-worktree.sh" "$ref")"            || return ;;
     branch)   dir="$(cd "$repo" && "$bindir/worktree-setup.sh" "$ref" "$base")" || return ;;
     worktree) dir="$ref" ;;
-    repo)     dir="$repo" ;;
+    repo)     if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+                dir="$("$bindir/canonical-checkout.sh" "$repo")" || return
+              else
+                dir="$repo"
+              fi ;;
     *)        print -u2 "wl: unknown kind: $kind"; return 1 ;;
   esac
   [[ -n $dir && -d $dir ]] || { print -u2 "wl: could not resolve directory"; return 1; }
