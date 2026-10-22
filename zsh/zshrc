@@ -1,6 +1,6 @@
 # Inlined `brew shellenv` - its output is static except PATH, which path_helper
 # just prepends homebrew onto. Forking brew + path_helper costs ~100ms on every
-# shell (Warp launches with --no_rcs, so this runs on every tab before `wl`); the
+# shell, so this runs on every terminal; the
 # prepend-and-dedupe below is the fork-free equivalent. Re-run `brew shellenv` and
 # refresh this block if Homebrew ever moves or changes its output.
 export HOMEBREW_PREFIX="/opt/homebrew"
@@ -37,8 +37,8 @@ plugins=(
 
 # --- Fast completion init -------------------------------------------------
 # Oh My Zsh runs `compinit -i -d <dump>` on every launch, which re-audits and
-# re-scans $fpath (~250ms - the bulk of zsh startup, and it runs before Warp's
-# typed tab command, e.g. `wl`, can appear). Wrap compinit so OMZ's call loads
+# re-scans $fpath (~250ms - the bulk of zsh startup, and it runs before the
+# typed tab command can appear). Wrap compinit so OMZ's call loads
 # the cached dump with `-C` (skip audit + fpath scan) when the dump is fresh,
 # and only does the full rebuild at most once a day. OMZ adds its plugin dirs
 # to $fpath before calling compinit, so the once-a-day rebuild still captures
@@ -70,162 +70,5 @@ export PATH="$HOME/.local/bin:$PATH"
 # Optional work-layer shell config (installed by `setup --with-work`).
 [ -r "$HOME/.config/zsh/work.zsh" ] && source "$HOME/.config/zsh/work.zsh"
 
-# NOTE: the old _gh_auto_switch chpwd hook (global `gh auth switch` per repo) is
-# gone. Account routing is per-invocation now: the wlaunch.ghaccount git config
-# key (set globally + overridden by the work gitconfig via includeIf) pins
-# GH_TOKEN inside wlaunch and the ~/.warp/bin worktree scripts, and Claude/CLI
-# usage injects GH_TOKEN=$(gh auth token -u <account>) per command. The gh
-# "active account" is no longer load-bearing anywhere.
-
-# Remember the last git repo you were in, so Warp's worktree / launch tab configs
-# default to it (no prompt) when Cmd+T opens a tab outside a repo (e.g. in $HOME).
-# Records the MAIN worktree root, so being in a linked worktree still points at the
-# primary checkout.
-_warp_track_repo() {
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return
-  local main state_dir="${WARP_STATE_DIR:-$HOME/.warp/state}" recents
-  main="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')"
-  [ -n "$main" ] || return
-  recents="$state_dir/recent-repos"
-  # Already the most-recent? skip the rewrite (this runs before every prompt).
-  [ -f "$recents" ] && [ "$(head -1 "$recents" 2>/dev/null)" = "$main" ] && return
-  mkdir -p "$state_dir"
-  # Most-recent-first, deduped, top 20 - powers the Cmd+T repo picker + here/parallel default.
-  { printf '%s\n' "$main"; [ -f "$recents" ] && grep -vxF "$main" "$recents"; } | head -20 > "$recents.tmp" 2>/dev/null && mv "$recents.tmp" "$recents"
-}
-# Record the active repo on cd and at shell start; window focus is handled below.
-(( ${chpwd_functions[(I)_warp_track_repo]} )) || chpwd_functions+=(_warp_track_repo)
-_warp_track_repo
-
-# Follow window/pane focus via Warp's focus reporting (Settings > Terminal > Enable
-# Focus Reporting): Warp sends CSI I on focus-in / CSI O on focus-out. We record the
-# repo on focus-in. Focus reporting is enabled only at the prompt and disabled while a
-# command runs, so the focus escapes never leak into TUIs like Claude Code as input.
-_warp_focus_in()  { _warp_track_repo; }
-_warp_focus_out() { : }
-zle -N _warp_focus_in
-zle -N _warp_focus_out
-bindkey '\e[I' _warp_focus_in
-bindkey '\e[O' _warp_focus_out
-_warp_focus_on()  { print -n '\e[?1004h'; }
-_warp_focus_off() { print -n '\e[?1004l'; }
-(( ${precmd_functions[(I)_warp_focus_on]} ))   || precmd_functions+=(_warp_focus_on)
-(( ${preexec_functions[(I)_warp_focus_off]} )) || preexec_functions+=(_warp_focus_off)
-
-# Worktrees are handled natively by Warp tab configs (claude_worktree / claude_pr).
-# No phantom wrapper here.
-
-# Quick Claude launchers - work in ANY pane (incl. a Cmd+D split). Cmd+T opens a
-# plain shell that natively inherits the current repo, so you stay free to `cd` to
-# another repo before launching - no tab ever traps you in one repo's Claude.
-#   ca           - Claude in the current directory (cd elsewhere first to switch repos)
-#   caw [branch] - new worktree in the CURRENT repo (inherited - no repo prompt):
-#                  pick an open PR by title or start a new branch, then cd into the
-#                  worktree + Claude. A branch arg skips the picker. Run it in a Cmd+D
-#                  split (which inherits the repo) to spin up a parallel agent.
+# Quick Claude launcher: `ca` runs Claude in the current directory.
 alias ca='claude'
-caw() {
-  emulate -L zsh
-  local wt
-  wt="$(~/.warp/bin/worktree-pick.sh "$@")" || return  # prints the worktree path
-  [[ -n $wt ]] || return
-  builtin cd -- "$wt" || return
-  # Queue `claude` for the next prompt rather than running it inline. caw is a single
-  # command, so an inline `claude` gives Warp no command boundary in the worktree and
-  # the tab stays on the parent repo. Returning to a prompt first lets Warp sample the
-  # worktree folder; you then press Enter on the pre-filled `claude` (which Warp also
-  # recognizes as the CLI agent, so its toolbar appears).
-  print -z claude
-}
-
-# wl auto-submit: when wl picks a CLI agent it sets _WL_AUTOSUBMIT; this line-init hook then
-# submits it as a real typed command at the NEXT prompt - so Warp gets a clean boundary
-# (folder chip) AND a bare agent command it recognizes as a CLI agent (toolbar), with no Enter
-# from you. add-zle-hook-widget composes with OMZ's own zle-line-init instead of clobbering
-# it; the hook is a permanent no-op until armed.
-typeset -g _WL_AUTOSUBMIT="${_WL_AUTOSUBMIT:-}"
-typeset -g _WL_SETTLE="${_WL_SETTLE:-}"
-_wl_autosubmit_hook() {
-  [[ -n $_WL_AUTOSUBMIT ]] || return
-  # Worktree-CREATING picks (branch/pr) run a multi-second setup script that lives in the
-  # repo root, so Warp's process-based folder detection (honor_ps1=false -> OSC 7 ignored)
-  # latches onto the repo root and the chip stays stuck there. Bounce off ONE empty prompt
-  # first (instant, no keystroke from you) so Warp re-samples the worktree cwd, THEN submit
-  # the agent on the next line-init. Instant switch/repo picks don't set _WL_SETTLE.
-  if [[ -n $_WL_SETTLE ]]; then
-    _WL_SETTLE=""
-    zle accept-line          # empty line -> fresh prompt in the worktree; _WL_AUTOSUBMIT stays armed
-    return
-  fi
-  BUFFER=$_WL_AUTOSUBMIT
-  _WL_AUTOSUBMIT=""
-  zle accept-line
-}
-zle -N _wl_autosubmit_hook
-autoload -Uz add-zle-hook-widget
-add-zle-hook-widget -d line-init _wl_autosubmit_hook 2>/dev/null  # idempotent on re-source
-add-zle-hook-widget line-init _wl_autosubmit_hook
-
-# wl - the unified launcher TUI (github.com/thomast8/wlaunch). One UI for everything:
-# browse a repo's PRs / branches / worktrees / recent repos, then open the pick in
-# Claude / Codex CLI / Codex Desktop / lazygit / serie / a plain shell, landing in the
-# right worktree every time.
-# wlaunch is a pure picker: it renders to stderr and prints ONE tab-separated line
-#   v1<TAB>kind<TAB>repo_root<TAB>ref<TAB>tool<TAB>base
-# to stdout (cancel -> nothing + non-zero). This function resolves the directory,
-# reusing pr-worktree.sh / worktree-setup.sh exactly as the tab configs do. Repo picks
-# first run canonical-checkout.sh so the primary checkout safely owns the default
-# branch for both Claude and Codex. Then it launches the tool: lazygit/serie run inline
-# (OSC 7 moves Warp's folder chip onto the
-# worktree); CLI agents are armed via _WL_AUTOSUBMIT so they auto-run as real commands
-# at the next prompt and Warp attaches the agent toolbar. Cancel -> no cd, no launch.
-# (WLAUNCH_BIN_DIR overrides the script dir; used only by the dispatch check.)
-wl() {
-  emulate -L zsh
-  local line schema kind repo ref tool base dir
-  local bindir="${WLAUNCH_BIN_DIR:-$HOME/.warp/bin}"
-  line="$("$bindir/wlaunch" "$@")" || return       # cancel -> non-zero -> bail
-  [[ -n $line ]] || return
-  # Split on tab preserving empty fields (kind=repo has an empty ref). `read` can't:
-  # tab is IFS-whitespace, so it collapses runs and drops empties, shifting columns.
-  local -a f; f=("${(@ps:\t:)line}")
-  schema=$f[1]; kind=$f[2]; repo=$f[3]; ref=$f[4]; tool=$f[5]; base=$f[6]
-  [[ $schema == v1 ]] || { print -u2 "wl: unrecognized result: $line"; return 1; }
-  case $kind in
-    pr)       dir="$(cd "$repo" && "$bindir/pr-worktree.sh" "$ref")"            || return ;;
-    branch)   dir="$(cd "$repo" && "$bindir/worktree-setup.sh" "$ref" "$base")" || return ;;
-    worktree) dir="$ref" ;;
-    repo)     if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
-                dir="$("$bindir/canonical-checkout.sh" "$repo")" || return
-              else
-                dir="$repo"
-              fi ;;
-    *)        print -u2 "wl: unknown kind: $kind"; return 1 ;;
-  esac
-  [[ -n $dir && -d $dir ]] || { print -u2 "wl: could not resolve directory"; return 1; }
-  builtin cd -- "$dir" || return
-  # Inline launch has no prompt boundary, so emit OSC 7 to move Warp's folder chip onto
-  # the worktree before the tool takes over the screen.
-  printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
-  case $tool in
-    claude)  _WL_AUTOSUBMIT="claude"; [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;  # settle first when we just created a worktree
-    codex)   _WL_AUTOSUBMIT="codex";  [[ $kind == branch || $kind == pr ]] && _WL_SETTLE=1 ;;
-    codex-desktop) codex app "$dir" ;;
-    lazygit) lazygit ;;
-    serie)   if [[ $kind == pr || $kind == branch ]]; then serie --initial-selection head; else serie; fi ;;
-    shell)   : ;;                                    # already cd'd; land at a prompt
-    *)       print -u2 "wl: unknown tool: $tool"; return 1 ;;
-  esac
-}
-
-# Alt+L (left Option = Meta) - one-key launcher: submit `wl` from any prompt. Warp can't
-# bind a key to a tab config, but the shell can - this types `wl` and accepts it, so the
-# launcher opens and acts in the current tab. Rebinds zsh's rarely-used down-case-word;
-# change the chord in bindkey if you like. (Only fires at an idle prompt, not while a TUI
-# like claude/lazygit owns the terminal; Cmd chords can't reach the shell, hence Alt.)
-_wl_launch_widget() {
-  BUFFER="wl"
-  zle accept-line
-}
-zle -N _wl_launch_widget
-bindkey '^[l' _wl_launch_widget   # Alt+L (Meta-L)
